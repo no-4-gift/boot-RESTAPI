@@ -391,8 +391,8 @@ public class UserController {
     public User save(@ApiParam(value = "회원아이디", required = true) @RequestParam String uid,
                      @ApiParam(value = "회원이름", required = true) @RequestParam String name) {
         User user = User.builder()
-                .uid("gyuseok@gmail.com")
-                .name("규석")
+                .uid(uid)
+                .name(name)
                 .build();
         return userJpaRepo.save(user);
     }
@@ -406,4 +406,294 @@ public class UserController {
 <br>
 
 `http://localhost:8000/swagger-ui.html`로 접속하면 API 문서가 이쁘게 작성되어있는 모습을 확인할 수 있다.
+
+<br>
+
+<br>
+
+### REST API 구조 설계하기
+
+---
+
+클라이언트에게 api를 제공해야 한다. 한번 배포하고 공유한 api는 구조를 쉽게 바꿀 수 없으므로 처음부터 효율적이고 확장 가능한 형태로 모델을 설계해야 한다.
+
+HttpMethod를 사용해 RESTFul한 api를 만들 수 있도록 몇가지 규칙을 적용하자.
+
+<br>
+
+1. Resource 사용 목적에 따라 HTTP Method 구분해서 사용
+
+   ```
+   GET : 서버에 주어진 리소스 정보 요청 (읽기)
+   POST : 서버에 리소스를 제출 (쓰기)
+   PUT : 서버에 리소스를 제출. POST와 달리 리소스 갱신에 사용 (수정)
+   DELETE : 서버에 주어진 리소스 삭제 요청 (삭제)
+   ```
+
+2. 매핑된 주소 체계를 정형화
+
+   ```
+   GET /v1/user/{userId} : 회원 userId에 해당하는 정보 조회
+   GET /v1/users : 회원 리스트 조회
+   POST /v1/user : 신규 회원정보 입력
+   PUT /v1/user : 기존회원 정보 수정
+   DELETE /v1/user/{userId} : userId로 기존회원 정보 삭제
+   ```
+
+3. 결과 데이터 구조 표준화해서 정의하기
+
+   ```json
+   // 기존 USER 정보
+   {
+       "msrl": 1,
+       "uid": "gyuseok@gmail.com",
+       "name": "규석"
+   }
+   // 표준화한 USER 정보
+   {
+     "data": {
+       "msrl": 1,
+       "uid": "gyuseok@gmail.com",
+       "name": "규석"
+     },
+     "success": true
+     "code": 0,
+     "message": "성공하였습니다."
+   }
+   ```
+
+<br>
+
+데이터 구조를 설계할 결과 모델을 구현해보자
+
+#### 결과를 담아낼 model 생성 
+
+com.rest.api에 model.response 패키지를 생성한다. 이 패키지에 결과를 담을 3개 모델을 생성하자
+
+1. ##### api 실행 결과를 담을 CommonResult
+
+   ```java
+   package com.rest.api.model.response;
+   
+   import io.swagger.annotations.ApiModelProperty;
+   import lombok.*;
+   
+   @Getter
+   @Setter
+   public class CommonResult {
+   
+       @ApiModelProperty(value = "응답 성공여부 : true/false")
+       private boolean success;
+   
+       @ApiModelProperty(value = "응답 코드 번호 : >= 0 정상, < 0 비정상")
+       private int code;
+   
+       @ApiModelProperty(value = "응답 메시지")
+       private String msg;
+   }
+   ```
+
+   api의 처리 상태 및 메시지를 내려주는 데이터로 구성됨. 
+   success는 api의 성공/실패 여부, code/msg는 응답 코드와 메시지를 나타냄
+   <br>
+
+2. ##### 결과가 단일 건인 api를 담는 SingleResult
+
+   ```java
+   package com.rest.api.model.response;
+   
+   import lombok.*;
+   
+   @Getter
+   @Setter
+   public class SingleResult<T> extends CommonResult {
+       private T data;
+   }
+   ```
+
+   CommonResult를 상속받으면서 api 요청 결과도 같이 출력되도록 함
+   <br>
+
+3. ##### 결과가 여러 건인 API를 담는 ListResult
+
+   ```java
+   package com.rest.api.model.response;
+   
+   import lombok.*;
+   import java.util.List;
+   
+   @Getter
+   @Setter
+   public class ListResult<T> extends CommonResult {
+       private List<T> list;
+   }
+   ```
+
+   결과가 여러개일 경우는 List로 리턴하도록 구현했음
+   <br>
+
+<br>
+
+#### 결과 모델을 처리할 서비스 생성
+
+com.rest.api에 service 패키지를 생성하고 ResponseService 클래스 구현하기
+
+```java
+package com.rest.api.service;
+
+import com.rest.api.model.response.CommonResult;
+import com.rest.api.model.response.ListResult;
+import com.rest.api.model.response.SingleResult;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class ResponseService {
+
+    // enum으로 api 요청 결과에 대한 code, message를 정의합니다.
+    public enum CommonResponse {
+        SUCCESS(0, "성공하였습니디."),
+        FAIL(-1, "실패하였습니다.");
+
+        int code;
+        String msg;
+
+        CommonResponse(int code, String msg) {
+            this.code = code;
+            this.msg = msg;
+        }
+
+        public int getCode() {
+            return code;
+        }
+
+        public String getMsg() {
+            return msg;
+        }
+    }
+    // 단일건 결과를 처리하는 메소드
+    public <T> SingleResult<T> getSingleResult(T data) {
+        SingleResult<T> result = new SingleResult<>();
+        result.setData(data);
+        setSuccessResult(result);
+        return result;
+    }
+    // 다중건 결과를 처리하는 메소드
+    public <T> ListResult<T> getListResult(List<T> list) {
+        ListResult<T> result = new ListResult<>();
+        result.setList(list);
+        setSuccessResult(result);
+        return result;
+    }
+    // 성공 결과만 처리하는 메소드
+    public CommonResult getSuccessResult() {
+        CommonResult result = new CommonResult();
+        setSuccessResult(result);
+        return result;
+    }
+    // 실패 결과만 처리하는 메소드
+    public CommonResult getFailResult() {
+        CommonResult result = new CommonResult();
+        result.setSuccess(false);
+        result.setCode(CommonResponse.FAIL.getCode());
+        result.setMsg(CommonResponse.FAIL.getMsg());
+        return result;
+    }
+    // 결과 모델에 api 요청 성공 데이터를 세팅해주는 메소드
+    private void setSuccessResult(CommonResult result) {
+        result.setSuccess(true);
+        result.setCode(CommonResponse.SUCCESS.getCode());
+        result.setMsg(CommonResponse.SUCCESS.getMsg());
+    }
+
+}
+```
+
+<br>
+
+이제 서비스 클래스 구현이 되었으므로, HttpMethod와 정형화된 주소체계를 가진 UserController를 만들어줘야한다.
+
+즉, 기존 기능을 service를 타고 넘어오도록 수정하자
+
+```java
+package com.rest.api.controller.v1;
+
+import com.rest.api.entity.User;
+import com.rest.api.model.response.CommonResult;
+import com.rest.api.model.response.ListResult;
+import com.rest.api.model.response.SingleResult;
+import com.rest.api.repo.UserJpaRepo;
+import com.rest.api.service.ResponseService;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import io.swagger.annotations.ApiParam;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
+
+@Api(tags = {"1. User"})
+@RequiredArgsConstructor
+@RestController
+@RequestMapping(value = "/v1")
+public class UserController {
+    private final UserJpaRepo userJpaRepo;
+    private final ResponseService responseService;
+
+    @ApiOperation(value = "회원 리스트 조회", notes = "모든 회원을 조회한다")
+    @GetMapping(value = "/users")
+    public ListResult<User> findAllUser() {
+        // 결과데이터가 여러건인경우 getListResult를 이용해서 결과를 출력한다.
+        return responseService.getListResult(userJpaRepo.findAll());
+    }
+
+    @ApiOperation(value = "회원 단건 조회", notes = "userId로 회원을 조회한다")
+    @GetMapping(value = "/user/{msrl}")
+    public SingleResult<User> findUserById(@ApiParam(value = "회원ID", required = true) @PathVariable long msrl) {
+        // 결과데이터가 단일건인경우 getBasicResult를 이용해서 결과를 출력한다.
+        return responseService.getSingleResult(userJpaRepo.findById(msrl).orElse(null));
+    }
+
+    @ApiOperation(value = "회원 입력", notes = "회원을 입력한다.")
+    @PostMapping(value = "/user")
+    public SingleResult<User> save(@ApiParam(value = "회원아이디", required = true) @RequestParam String uid,
+                     @ApiParam(value = "회원이름", required = true) @RequestParam String name) {
+        User user = User.builder()
+                .uid(uid)
+                .name(name)
+                .build();
+        return responseService.getSingleResult(userJpaRepo.save(user));
+    }
+
+    @ApiOperation(value = "회원 수정", notes = "회원정보를 수정한다")
+    @PutMapping(value = "/user")
+    public SingleResult<User> modify(
+            @ApiParam(value = "회원번호", required = true) @RequestParam long msrl,
+            @ApiParam(value = "회원아이디", required = true) @RequestParam String uid,
+            @ApiParam(value = "회원이름", required = true) @RequestParam String name) {
+        User user = User.builder()
+                .msrl(msrl)
+                .uid(uid)
+                .name(name)
+                .build();
+        return responseService.getSingleResult(userJpaRepo.save(user));
+    }
+
+    @ApiOperation(value = "회원 삭제", notes = "userId로 회원정보를 삭제한다")
+    @DeleteMapping(value = "/user/{msrl}")
+    public CommonResult delete(
+            @ApiParam(value = "회원번호", required = true) @PathVariable long msrl) {
+        userJpaRepo.deleteById(msrl);
+        // 성공 결과 정보만 필요한경우 getSuccessResult()를 이용하여 결과를 출력한다.
+        return responseService.getSuccessResult();
+    }
+}
+```
+
+> 기존의 repo 패키지의 UserJpaRepo에서 interface의 Integer를 Long으로 수정해줘야 msrl을 넣을 수 있다.
+
+정형화된 Swagger 문서의 결과는 아래와 같다.
+
+<img src="https://daddyprogrammer.org/wp-content/uploads/2019/04/swagger_model_1.png">
+
+
 
