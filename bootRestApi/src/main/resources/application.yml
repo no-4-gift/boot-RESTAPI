@@ -8,7 +8,9 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.H2Dialect
     showSql: true
-    properties.hibernate.hbm2ddl.auto: none
+    properties.hibernate.hbm2ddl.auto: update
   messages:
     basename: i18n/exception
     encoding: UTF-8
+  jwt:
+    secret: govlepel@$&
